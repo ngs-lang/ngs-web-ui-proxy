@@ -14,30 +14,30 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
-const id_to_ws = new Map();
-
 console.log('argv', process.argv);
-const upstream = net.createConnection(process.argv[2]); // node server.js FIRST_ACTUAL_ARG
-
-upstream.on('data', function (data) {
-    console.log('data from upstream', data);
-    const msg = JSON.parse(data.toString());
-    console.log('data from upstream - decoded', msg);
-    if(id_to_ws.has(msg.id)) {
-        console.log('Found client for message', msg.id);
-        id_to_ws.get(msg.id).send(data.toString());
-        id_to_ws.delete(msg.id);
-    } else {
-        console.error('Found client for message', msg.id);
-    }
-});
-
 
 wss.on('connection', (ws: WebSocket) => {
 
     let code = crypto.randomBytes(20).toString('hex');
     console.log('Code', code);
     let authenticated = false;
+    let upstream:net.Socket;
+
+    function connect_to_upstream() {
+        upstream = net.createConnection(process.argv[2]); // node server.js FIRST_ACTUAL_ARG
+
+        upstream.on('connect', () => console.log('upstream connected'));
+        upstream.on('end', () => console.log('upstream closed connection'));
+        upstream.on('error', (e) => console.log('upstream error', e));
+
+        upstream.on('data', function (data) {
+            console.log('data from upstream', data);
+            const msg = JSON.parse(data.toString());
+            console.log('data from upstream - decoded', msg);
+            ws.send(data.toString());
+        });
+
+    }
 
     debug('connection');
     ws.send(JSON.stringify({'type': 'please_auth'}));
@@ -53,6 +53,7 @@ wss.on('connection', (ws: WebSocket) => {
             if (msg.code === code) {
                 ws.send(JSON.stringify({'type': 'auth_ok'}));
                 authenticated = true;
+                connect_to_upstream();
             } else {
                 ws.send(JSON.stringify({'type': 'auth_fail'}));
             }
@@ -64,10 +65,6 @@ wss.on('connection', (ws: WebSocket) => {
         }
         if (msg.jsonrpc === '2.0') {
             // JSON-RPC is forwarded upstream
-
-            if (msg.id) {
-                id_to_ws.set(msg.id, ws);
-            }
 
             upstream.write(event.data + "\n", function (err) {
                 if(err) {
