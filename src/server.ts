@@ -32,15 +32,19 @@ wss.on('connection', (ws: WebSocket) => {
 
         upstream.on('data', function (data) {
             console.log('data from upstream', data);
-            const msg = JSON.parse(data.toString());
-            console.log('data from upstream - decoded', msg);
+            try {
+                const msg = JSON.parse(data.toString());
+                console.log('data from upstream - decoded', msg);
+            } catch(e) {
+                console.log('data from upstream - could not decode');
+            }
             ws.send(data.toString());
         });
 
     }
 
     debug('connection');
-    ws.send(JSON.stringify({'type': 'please_auth'}));
+    ws.send(JSON.stringify({'type': 'please_auth'}) + "\n");
     ws.onmessage = function (event) {
         if (typeof event.data !== "string") {
             console.log('event.data is not a string')
@@ -51,16 +55,16 @@ wss.on('connection', (ws: WebSocket) => {
         // maybe implement as JSON RPC too?
         if (msg.type === 'auth') {
             if (msg.code === code) {
-                ws.send(JSON.stringify({'type': 'auth_ok'}));
+                ws.send(JSON.stringify({'type': 'auth_ok'}) + "\n");
                 authenticated = true;
                 connect_to_upstream();
             } else {
-                ws.send(JSON.stringify({'type': 'auth_fail'}));
+                ws.send(JSON.stringify({'type': 'auth_fail'}) + "\n");
             }
             return;
         }
         if (!authenticated) {
-            ws.send(JSON.stringify({'type': 'please_auth', 'hint': 'forbidden'}));
+            ws.send(JSON.stringify({'type': 'please_auth', 'hint': 'forbidden'}) + "\n");
             return;
         }
         if (msg.jsonrpc === '2.0') {
