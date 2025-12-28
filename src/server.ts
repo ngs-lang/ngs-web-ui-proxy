@@ -25,7 +25,7 @@ console.log('argv', process.argv);
 const code = crypto.randomBytes(20).toString('hex');
 const secret = crypto.randomBytes(20).toString('hex');
 let canAuthenticateWithCode = true; // Single use code
-let authAttempts = 0;
+let failedAuthAttempts = 0;
 
 setTimeout(function () {
     canAuthenticateWithCode = false;
@@ -49,42 +49,63 @@ function runCommand(command: string): void {
 runCommand(`open 'http://localhost:3000/?code=${encodeURIComponent(code)}'`);
 
 
-wss.on('connection', (ws: WebSocket) => {
+let socketNumber = 1;
+const socketNumberSymbol = Symbol("NGS socket number");
+wss.on('connection', (ws: WebSocket & {[socketNumberSymbol]: number}) => {
 
-    let upstream:net.Socket;
+    ws[socketNumberSymbol] = socketNumber++;
+
+    let upstream: net.Socket;
     let authenticated = false;
+
+    setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+            ws.send('ping');
+        }
+    }, 10000);
 
     function connect_to_upstream() {
         upstream = net.createConnection(process.argv[2]); // node server.js FIRST_ACTUAL_ARG
 
-        upstream.on('connect', () => console.log('upstream connected'));
-        upstream.on('end', () => console.log('upstream closed connection'));
-        upstream.on('error', (e) => console.log('upstream error', e));
+        upstream.on('connect', () => debug('upstream connected'));
+        upstream.on('end', () => debug('upstream closed connection'));
+        upstream.on('error', (e) => debug('upstream error', e));
 
         upstream.on('data', function (data) {
-            console.log('data from upstream', data);
+            debug('data from upstream', data);
             try {
                 const msg = JSON.parse(data.toString());
-                console.log('data from upstream - decoded', msg);
+                debug('data from upstream - decoded', msg);
             } catch(e) {
-                console.log('data from upstream - could not decode');
+                debug('data from upstream - could not decode');
             }
-            ws.send(data.toString());
+            try {
+                ws.send(data.toString());
+            } catch(e) {
+                // TODO: more serious handling of gone socket
+                debug('Fail to send to data from upstream to socket', ws[socketNumberSymbol]);
+            }
         });
 
     }
 
-    debug('connection');
+    debug('connection', ws[socketNumberSymbol]);
     ws.send(JSON.stringify({'type': 'please_auth'}) + "\n");
     ws.onmessage = function (event) {
         if (typeof event.data !== "string") {
-            console.log('event.data is not a string')
+            debug('event.data is not a string')
             return;
         }
         const msg = JSON.parse(event.data);
-        console.log('message', msg);
+        debug('message', msg);
         // maybe implement as JSON RPC too?
         if (msg.type === 'auth') {
+            // Not OK for production. Blocks everybody indiscriminately.
+            if(failedAuthAttempts > 10) {
+                ws.send(JSON.stringify({'type': 'auth_fail', 'hint': 'too many failed auth attempts'}) + "\n");
+                ws.close();
+                return;
+            }
             if ((canAuthenticateWithCode && msg.code === code) || msg.secret === secret) {
                 ws.send(JSON.stringify({
                     'type': 'auth_ok',
@@ -97,8 +118,7 @@ wss.on('connection', (ws: WebSocket) => {
             }
 
             ws.send(JSON.stringify({'type': 'auth_fail', 'hint': 'both code and secret are wrong'}) + "\n");
-            authAttempts++;
-            assert.ok(authAttempts < 10, 'Too many auth attempts');
+            failedAuthAttempts++;
             return;
         }
         if (!authenticated) {
@@ -112,7 +132,7 @@ wss.on('connection', (ws: WebSocket) => {
                 if(err) {
                     console.error('Failed to write to upstream', err);
                 } else {
-                    console.log('Send upstream', event.data);
+                    debug('Send upstream', event.data);
                 }
             });
         }
