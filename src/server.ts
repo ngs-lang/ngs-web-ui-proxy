@@ -22,21 +22,16 @@ console.log('argv', process.argv);
 
 // Auth - start setup
 // Authentication is a mess, redo later
+const code = crypto.randomBytes(20).toString('hex');
 const secret = crypto.randomBytes(20).toString('hex');
-const secretFilePath = path.join(os.homedir(), '.ngs-ui-secret');
-fs.writeFileSync(secretFilePath, secret, {mode: 0o600});
-console.log('Secret file is at', secretFilePath);
-let canAuthenticate = true; // Single use secret
+let canAuthenticateWithCode = true; // Single use code
 let authAttempts = 0;
 
 setTimeout(function () {
-    canAuthenticate = false;
+    canAuthenticateWithCode = false;
     console.log('Authentication is now disabled');
 }, 10000);
 // Auth - end setup
-
-// TODO: open the URL in the browser
-// http://localhost:3000/?secret=XX
 
 function runCommand(command: string): void {
     exec(command, (error, stdout, stderr) => {
@@ -51,7 +46,7 @@ function runCommand(command: string): void {
     });
 }
 
-runCommand(`open 'http://localhost:3000/?secret=${encodeURIComponent(secret)}'`);
+runCommand(`open 'http://localhost:3000/?code=${encodeURIComponent(code)}'`);
 
 
 wss.on('connection', (ws: WebSocket) => {
@@ -90,22 +85,21 @@ wss.on('connection', (ws: WebSocket) => {
         console.log('message', msg);
         // maybe implement as JSON RPC too?
         if (msg.type === 'auth') {
-            if (canAuthenticate) {
-                if (msg.code === secret) {
-                    ws.send(JSON.stringify({'type': 'auth_ok'}) + "\n");
-                    authenticated = true;
-                    canAuthenticate = false;
-                    connect_to_upstream();
-                } else {
-                    ws.send(JSON.stringify({'type': 'auth_fail', 'hint': 'wrong secret'}) + "\n");
-                    authAttempts++;
-                    assert.ok(authAttempts < 10, 'Too many auth attempts');
-                }
-                return;
-            } else {
-                ws.send(JSON.stringify({'type': 'auth_fail', 'hint': 'too late'}) + "\n");
+            if ((canAuthenticateWithCode && msg.code === code) || msg.secret === secret) {
+                ws.send(JSON.stringify({
+                    'type': 'auth_ok',
+                    'secret': secret
+                }) + "\n");
+                authenticated = true;
+                canAuthenticateWithCode = false;
+                connect_to_upstream();
                 return;
             }
+
+            ws.send(JSON.stringify({'type': 'auth_fail', 'hint': 'both code and secret are wrong'}) + "\n");
+            authAttempts++;
+            assert.ok(authAttempts < 10, 'Too many auth attempts');
+            return;
         }
         if (!authenticated) {
             ws.send(JSON.stringify({'type': 'please_auth', 'hint': 'forbidden'}) + "\n");
